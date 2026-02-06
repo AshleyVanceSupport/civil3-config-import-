@@ -55,7 +55,7 @@ function Download-Script {
         return $true
     }
     catch {
-        Write-Warn "Failed to download $Url: $($_.Exception.Message)"
+        Write-Warn "Failed to download ${Url}: $($_.Exception.Message)"
         return $false
     }
 }

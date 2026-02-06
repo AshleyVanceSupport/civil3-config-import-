@@ -339,10 +339,14 @@ try {
         if (Has-WarnLike -Results $results -Pattern "Installer cache present:*") {
             $localCleanup = $CleanupScriptPath
             if ([string]::IsNullOrWhiteSpace($localCleanup)) {
-                $candidate1 = Join-Path $PSScriptRoot "Remove-Autodesk-InstallerCache.ps1"
-                $candidate2 = "C:\Archive\Remove-Autodesk-InstallerCache.ps1"
-                if (Test-Path -LiteralPath $candidate1) { $localCleanup = $candidate1 }
-                elseif (Test-Path -LiteralPath $candidate2) { $localCleanup = $candidate2 }
+                if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+                    $candidate1 = Join-Path -Path $PSScriptRoot -ChildPath "Remove-Autodesk-InstallerCache.ps1"
+                    if (Test-Path -LiteralPath $candidate1) { $localCleanup = $candidate1 }
+                }
+                if ([string]::IsNullOrWhiteSpace($localCleanup)) {
+                    $candidate2 = "C:\Archive\Remove-Autodesk-InstallerCache.ps1"
+                    if (Test-Path -LiteralPath $candidate2) { $localCleanup = $candidate2 }
+                }
             }
 
             if (-not [string]::IsNullOrWhiteSpace($localCleanup) -and (Test-Path -LiteralPath $localCleanup)) {

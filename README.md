@@ -38,10 +38,24 @@ Runs import and verify together, with optional interactive prompts to fix remain
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Post-Install-Civil3D-2023.ps1 | iex"
 ```
 
+Non-interactive (download to file so you can pass parameters):
+```powershell
+$script = "$env:TEMP\Post-Install-Civil3D-2023.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Post-Install-Civil3D-2023.ps1" -OutFile $script
+powershell -ExecutionPolicy Bypass -File $script -Interactive false
+```
+
 ## Verify (target machine)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Verify-Civil3D-2023.ps1 | iex"
+```
+
+Non-interactive:
+```powershell
+$script = "$env:TEMP\Verify-Civil3D-2023.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Verify-Civil3D-2023.ps1" -OutFile $script
+powershell -ExecutionPolicy Bypass -File $script -Interactive false
 ```
 
 ## Cleanup (optional)
