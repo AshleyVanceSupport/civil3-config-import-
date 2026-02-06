@@ -9,9 +9,37 @@ This repo provides export, import, verification, and post-install helper scripts
 ## Recommended Flow
 1) **Install Civil 3D 2023** on the target machine and launch once, then close it.
 2) **Export** on the source machine (the one with the desired settings).
-3) **Transfer** `C:\Archive\Config File Transfer\Civil3D\2023` to the target machine.
+3) **Transfer** the bundle to the target machine (see Bundle Location below).
 4) **Import** on the target machine.
 5) **Verify** and complete manual steps.
+
+## Bundle Location (required before import)
+
+The scripts expect this path on the target machine:
+
+`C:\Archive\Config File Transfer\Civil3D\2023`
+
+If you are using the shared drive, copy the Civil3D bundle from:
+
+`S:\Setup Files\Config File Transfer\Civil 3D\Civil3D`
+
+to:
+
+`C:\Archive\Config File Transfer\Civil3D`
+
+You should end up with:
+
+`C:\Archive\Config File Transfer\Civil3D\2023`
+
+If your bundle is stored somewhere else, download the scripts to a file and pass `-BundleRoot`.
+
+## Shortcut Support File (acad.pgp)
+
+The legacy shortcut support script is still used:
+
+`S:\Setup Files\CAD\AC3D\Copy Shortcut Support File.bat`
+
+The **Import** script will run it automatically if the S: drive is available and will also copy `acad.pgp` directly into `%APPDATA%\Autodesk\C3D 2023\enu\Support` for verification. If S: is not connected, run the batch manually after installation (or copy `acad.pgp` into the Support folder).
 
 ## Export (source machine)
 
@@ -28,6 +56,13 @@ Output bundle:
 Run in PowerShell:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Import-Civil3D-2023.ps1 | iex"
+```
+
+Non-interactive (download to file so you can pass parameters):
+```powershell
+$script = "$env:TEMP\Import-Civil3D-2023.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/AshleyVanceSupport/civil3-config-import-/refs/heads/main/Import-Civil3D-2023.ps1" -OutFile $script
+powershell -ExecutionPolicy Bypass -File $script -BundleRoot "C:\Archive\Config File Transfer\Civil3D\2023"
 ```
 
 ## Post-Install Helper (target machine)
@@ -103,9 +138,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.gi
 - Install C3D 2023 and launch once to initialize ProgramData folders.
 - Set `.dwg` default app to AutoCAD DWG Launcher.
 - Delete `C:\Autodesk` installer cache (or run cleanup script).
+- Run `S:\Setup Files\CAD\AC3D\Copy Shortcut Support File.bat` if S: was unavailable during import.
 - Run `MOVEBAK C:\CADBackup` in C3D command line (per SOP).
 - AV Rotate toolbar UI steps (load `custom_ucs.cuix`, save workspace).
 - Any FAQ fixes (Sheet Set Manager reg file, ADFS reg key, etc.).
+
+## Notes
+- Close Civil 3D before running Import.
+- Run scripts in PowerShell (not CMD).
 
 ## Logs
 All scripts write logs to: `C:\Archive\Logs\Civil3D\2023`
