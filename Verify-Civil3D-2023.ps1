@@ -168,6 +168,84 @@ function Test-RegistryEquals {
     }
 }
 
+function Get-DwgAssociation {
+    $result = [ordered]@{
+        Match = $false
+        Details = @()
+    }
+
+    $patterns = @(
+        "AutoCAD",
+        "AcLauncher",
+        "DWGLauncher"
+    )
+
+    function Test-ProgIdValue {
+        param(
+            [string]$Label,
+            [string]$Value
+        )
+        if ([string]::IsNullOrWhiteSpace($Value)) { return }
+        $result.Details += ("${Label}: ${Value}")
+        foreach ($pattern in $patterns) {
+            if ($Value -match $pattern) {
+                $result.Match = $true
+                break
+            }
+        }
+    }
+
+    try {
+        $userChoiceKey = "Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dwg\UserChoice"
+        if (Test-Path -LiteralPath $userChoiceKey) {
+            $progId = (Get-ItemProperty -Path $userChoiceKey -ErrorAction Stop).ProgId
+            Test-ProgIdValue -Label "UserChoice" -Value $progId
+        }
+    }
+    catch {
+    }
+
+    try {
+        $hkcuClass = Get-Item -LiteralPath "Registry::HKCU\Software\Classes\.dwg" -ErrorAction Stop
+        $progId = $hkcuClass.GetValue("")
+        Test-ProgIdValue -Label "HKCU\\Software\\Classes\\.dwg" -Value $progId
+    }
+    catch {
+    }
+
+    try {
+        $hklmClass = Get-Item -LiteralPath "Registry::HKLM\Software\Classes\.dwg" -ErrorAction Stop
+        $progId = $hklmClass.GetValue("")
+        Test-ProgIdValue -Label "HKLM\\Software\\Classes\\.dwg" -Value $progId
+    }
+    catch {
+    }
+
+    try {
+        $hkcrClass = Get-Item -LiteralPath "Registry::HKCR\.dwg" -ErrorAction Stop
+        $progId = $hkcrClass.GetValue("")
+        Test-ProgIdValue -Label "HKCR\\.dwg" -Value $progId
+    }
+    catch {
+    }
+
+    try {
+        $openWithKey = "Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dwg\OpenWithProgids"
+        if (Test-Path -LiteralPath $openWithKey) {
+            $progIds = (Get-ItemProperty -Path $openWithKey -ErrorAction Stop).PSObject.Properties | Where-Object {
+                $_.Name -notin @("PSPath", "PSParentPath", "PSChildName", "PSDrive", "PSProvider")
+            } | ForEach-Object { $_.Name }
+            foreach ($progId in $progIds) {
+                Test-ProgIdValue -Label "OpenWithProgids" -Value $progId
+            }
+        }
+    }
+    catch {
+    }
+
+    return $result
+}
+
 $exitCode = 0
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logDir = Join-Path $LogRoot "2023"
@@ -276,18 +354,22 @@ try {
     $fixedGeneral = "Registry::HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\FixedProfile\General"
     Test-RegistryEquals -KeyPath $fixedGeneral -ValueName "AcetMoveBak" -Expected $CadBackupPath -Label "Backup path" -Results $results
 
-    $dwgUserChoice = "Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dwg\UserChoice"
-    if (Test-Path -LiteralPath $dwgUserChoice) {
-        try {
-            $dwgProgId = (Get-ItemProperty -Path $dwgUserChoice -ErrorAction Stop).ProgId
-            Add-Result -Status "Pass" -Message "DWG association: ${dwgProgId}" -Results $results
+    $dwgAssoc = Get-DwgAssociation
+    if ($dwgAssoc.Match) {
+        if ($dwgAssoc.Details.Count -gt 0) {
+            Add-Result -Status "Pass" -Message ("DWG association: " + ($dwgAssoc.Details -join "; ")) -Results $results
         }
-        catch {
-            Add-Result -Status "Warn" -Message "DWG association: unable to read" -Results $results
+        else {
+            Add-Result -Status "Pass" -Message "DWG association: AutoCAD detected" -Results $results
         }
     }
     else {
-        Add-Result -Status "Warn" -Message "DWG association: UserChoice not set" -Results $results
+        if ($dwgAssoc.Details.Count -gt 0) {
+            Add-Result -Status "Warn" -Message ("DWG association: not AutoCAD (" + ($dwgAssoc.Details -join "; ") + ")") -Results $results
+        }
+        else {
+            Add-Result -Status "Warn" -Message "DWG association: not set" -Results $results
+        }
     }
 
     $autodeskInstallerCache = "C:\Autodesk"
