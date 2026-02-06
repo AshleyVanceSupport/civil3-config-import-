@@ -176,9 +176,12 @@ function Get-DwgAssociation {
 
     $patterns = @(
         "AutoCAD",
+        "Acad",
         "AcLauncher",
         "DWGLauncher"
     )
+
+    $foundAny = $false
 
     function Test-ProgIdValue {
         param(
@@ -187,6 +190,7 @@ function Get-DwgAssociation {
         )
         if ([string]::IsNullOrWhiteSpace($Value)) { return }
         $result.Details += ("${Label}: ${Value}")
+        $script:foundAny = $true
         foreach ($pattern in $patterns) {
             if ($Value -match $pattern) {
                 $result.Match = $true
@@ -238,6 +242,16 @@ function Get-DwgAssociation {
             foreach ($progId in $progIds) {
                 Test-ProgIdValue -Label "OpenWithProgids" -Value $progId
             }
+        }
+    }
+    catch {
+    }
+
+    try {
+        $assocOutput = & cmd.exe /c "assoc .dwg" 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($assocOutput)) {
+            $assocValue = ($assocOutput -split "=", 2)[-1]
+            Test-ProgIdValue -Label "assoc" -Value $assocValue
         }
     }
     catch {
@@ -368,7 +382,7 @@ try {
             Add-Result -Status "Warn" -Message ("DWG association: not AutoCAD (" + ($dwgAssoc.Details -join "; ") + ")") -Results $results
         }
         else {
-            Add-Result -Status "Warn" -Message "DWG association: not set" -Results $results
+            Add-Result -Status "Warn" -Message "DWG association: not set (no ProgId found)" -Results $results
         }
     }
 
