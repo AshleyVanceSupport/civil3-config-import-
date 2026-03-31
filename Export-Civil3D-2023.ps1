@@ -1,4 +1,18 @@
-# Civil 3D 2023 export script (run as user)
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Exports Civil 3D 2023 profile and configuration files to a bundle directory.
+
+.DESCRIPTION
+    Copies the Civil 3D 2023 profile registry export, support files, survey data,
+    pipe catalog, LISP files, and network cache files to a staging bundle directory.
+    Must run as the target user (not SYSTEM). Civil 3D must be closed.
+
+.NOTES
+    Run As: User context (not SYSTEM)
+    PS Version: 5.1+
+    Exit Codes: 0=success, 1=partial, 2=critical
+#>
 
 param(
     [string]$BundleRoot = "C:\Archive\Config File Transfer\Civil3D\2023",
@@ -9,24 +23,36 @@ param(
     [string]$AvRotatePath = "S:\Templates\Civil Templates\CAD Tools\AV Rotate"
 )
 
+# NinjaOne environment variable overrides
+if (-not [string]::IsNullOrWhiteSpace($env:BundleRoot))        { $BundleRoot = $env:BundleRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:ProfileName))       { $ProfileName = $env:ProfileName }
+if (-not [string]::IsNullOrWhiteSpace($env:LogRoot))           { $LogRoot = $env:LogRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:NetworkCacheRoot))  { $NetworkCacheRoot = $env:NetworkCacheRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:ShortcutBatchPath)) { $ShortcutBatchPath = $env:ShortcutBatchPath }
+if (-not [string]::IsNullOrWhiteSpace($env:AvRotatePath))      { $AvRotatePath = $env:AvRotatePath }
+
 $ErrorActionPreference = "Stop"
 
 function Write-Info {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Gray
 }
 
 function Write-Warn {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Yellow
 }
 
 function Write-Err {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Red
 }
 
-function Ensure-Directory {
+function Initialize-Directory {
+    [CmdletBinding()]
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -Path $Path -ItemType Directory -Force | Out-Null
@@ -34,15 +60,20 @@ function Ensure-Directory {
 }
 
 function Test-IsAdmin {
+    [CmdletBinding()]
+    param()
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Test-IsSystem {
+    [CmdletBinding()]
+    param()
     return [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem
 }
 
 function Get-CurrentProfileName {
+    [CmdletBinding()]
     param([string]$ProfilesRoot)
     try {
         $props = Get-ItemProperty -Path $ProfilesRoot -ErrorAction Stop
@@ -56,6 +87,7 @@ function Get-CurrentProfileName {
 }
 
 function Get-FirstProfileName {
+    [CmdletBinding()]
     param([string]$ProfilesRoot)
     try {
         $subKey = Get-ChildItem -Path $ProfilesRoot -ErrorAction Stop | Select-Object -First 1
@@ -69,20 +101,21 @@ function Get-FirstProfileName {
 }
 
 function Copy-FileIfDifferent {
+    [CmdletBinding()]
     param([string]$Source, [string]$Destination)
 
     if (Test-Path -LiteralPath $Destination) {
         try {
-            $srcHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash
-            $dstHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash
+            $srcHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source -ErrorAction Stop).Hash
+            $dstHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination -ErrorAction Stop).Hash
             if ($srcHash -eq $dstHash) {
                 return "Skipped"
             }
         }
         catch {
             try {
-                $srcInfo = Get-Item -LiteralPath $Source
-                $dstInfo = Get-Item -LiteralPath $Destination
+                $srcInfo = Get-Item -LiteralPath $Source -ErrorAction Stop
+                $dstInfo = Get-Item -LiteralPath $Destination -ErrorAction Stop
                 if ($srcInfo.Length -eq $dstInfo.Length -and $srcInfo.LastWriteTimeUtc -eq $dstInfo.LastWriteTimeUtc) {
                     return "Skipped"
                 }
@@ -98,6 +131,7 @@ function Copy-FileIfDifferent {
 }
 
 function Copy-DirectoryContent {
+    [CmdletBinding()]
     param(
         [string]$Source,
         [string]$Destination,
@@ -112,20 +146,22 @@ function Copy-DirectoryContent {
     }
 
     try {
-        Ensure-Directory $Destination
+        Initialize-Directory $Destination
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: destination create failed - $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: destination create failed - $($currentErr.Exception.Message)")
         return
     }
 
     try {
-        $sourceRoot = (Resolve-Path -LiteralPath $Source).Path
+        $sourceRoot = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).Path
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: source resolve failed - $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: source resolve failed - $($currentErr.Exception.Message)")
         return
     }
 
@@ -139,7 +175,7 @@ function Copy-DirectoryContent {
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($sourceRoot.Length).TrimStart("\\")
         $destFile = Join-Path $Destination $relative
-        Ensure-Directory (Split-Path -Path $destFile -Parent)
+        Initialize-Directory (Split-Path -Path $destFile -Parent)
         try {
             $result = Copy-FileIfDifferent -Source $file.FullName -Destination $destFile
             if ($result -eq "Copied") {
@@ -150,13 +186,15 @@ function Copy-DirectoryContent {
             }
         }
         catch {
+            $currentErr = $_
             $Results.Failed++
-            [void]$Failures.Add("${Label}: $relative - $($_.Exception.Message)")
+            [void]$Failures.Add("${Label}: $relative - $($currentErr.Exception.Message)")
         }
     }
 }
 
 function Copy-FileToCache {
+    [CmdletBinding()]
     param(
         [string]$Source,
         [string]$Destination,
@@ -171,7 +209,7 @@ function Copy-FileToCache {
     }
 
     try {
-        Ensure-Directory (Split-Path -Path $Destination -Parent)
+        Initialize-Directory (Split-Path -Path $Destination -Parent)
         $result = Copy-FileIfDifferent -Source $Source -Destination $Destination
         if ($result -eq "Copied") {
             $Results.Copied++
@@ -181,8 +219,9 @@ function Copy-FileToCache {
         }
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: $($currentErr.Exception.Message)")
     }
 }
 
@@ -192,8 +231,8 @@ $logDir = Join-Path $LogRoot "2023"
 $logPath = Join-Path $logDir "Export_Civil3D_2023_$timestamp.log"
 
 try {
-    Ensure-Directory $logDir
-    Start-Transcript -Path $logPath -Force | Out-Null
+    Initialize-Directory $logDir
+    Start-Transcript -Path $logPath -Force -ErrorAction Stop | Out-Null
 
     if (Test-IsSystem) {
         Write-Err "This script must run as a user, not SYSTEM."
@@ -204,14 +243,14 @@ try {
     $isAdmin = Test-IsAdmin
     Write-Info "User: $env:USERNAME | Admin: $isAdmin"
 
-    Ensure-Directory $BundleRoot
+    Initialize-Directory $BundleRoot
     $profileDir = Join-Path $BundleRoot "Profile"
-    Ensure-Directory $profileDir
+    Initialize-Directory $profileDir
 
     if ([string]::IsNullOrWhiteSpace($NetworkCacheRoot)) {
         $NetworkCacheRoot = Join-Path $BundleRoot "NetworkCache"
     }
-    Ensure-Directory $NetworkCacheRoot
+    Initialize-Directory $NetworkCacheRoot
 
     $profilesRoot = "Registry::HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\Profiles"
     if (-not (Test-Path -LiteralPath $profilesRoot)) {
@@ -313,11 +352,12 @@ try {
     }
 }
 catch {
+    $currentErr = $_
     if ($exitCode -eq 0) {
         $exitCode = 2
     }
-    Write-Err "FATAL: $($_.Exception.Message)"
-    Write-Err "Stack trace: $($_.ScriptStackTrace)"
+    Write-Err "FATAL: $($currentErr.Exception.Message)"
+    Write-Err "Stack trace: $($currentErr.ScriptStackTrace)"
 }
 finally {
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null

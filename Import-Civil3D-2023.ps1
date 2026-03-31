@@ -1,48 +1,104 @@
-# Civil 3D 2023 import script (run as user)
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Imports Civil 3D 2023 profile and configuration files from a bundle directory.
+
+.DESCRIPTION
+    Clears the existing profile registry key, imports Civil3D.arg, sets it as the
+    current profile, configures backup options, trusted paths, and copies Support,
+    Survey, Pipe Catalog, and Lisp files from the bundle. Runs the shortcut support
+    batch if the network path is available. Must run as the target user (not SYSTEM).
+    Civil 3D must be closed before running.
+
+.PARAMETER BundleRoot
+    Path to the root of the Civil 3D 2023 configuration bundle.
+
+.PARAMETER ProfileArgPath
+    Explicit path to Civil3D.arg. Auto-detected from BundleRoot if omitted.
+
+.PARAMETER ProfileName
+    Civil 3D profile name. Auto-detected from the .arg file if omitted.
+
+.PARAMETER LogRoot
+    Root directory for log output. A 2023 subfolder is created automatically.
+
+.PARAMETER NetworkCacheRoot
+    Directory for caching network assets locally. Defaults to BundleRoot\NetworkCache.
+
+.PARAMETER ShortcutBatchPath
+    Path to "Copy Shortcut Support File.bat" on the network share.
+
+.PARAMETER AvRotatePath
+    Path to the AV Rotate folder on the network share.
+
+.PARAMETER CadBackupPath
+    Directory used for AutoCAD backup files (AcetMoveBak).
+
+.NOTES
+    Run As: User context (not SYSTEM)
+    PS Version: 5.1+
+    Exit Codes: 0=success, 1=partial/warnings, 2=critical, 100=nothing-to-do, 3010=reboot
+#>
 
 param(
-    [string]$BundleRoot = "C:\Archive\Config File Transfer\Civil3D\2023",
-    [string]$ProfileArgPath = "",
-    [string]$ProfileName = "",
-    [string]$LogRoot = "C:\Archive\Logs\Civil3D",
-    [string]$NetworkCacheRoot = "",
+    [string]$BundleRoot        = "C:\Archive\Config File Transfer\Civil3D\2023",
+    [string]$ProfileArgPath    = "",
+    [string]$ProfileName       = "",
+    [string]$LogRoot           = "C:\Archive\Logs\Civil3D",
+    [string]$NetworkCacheRoot  = "",
     [string]$ShortcutBatchPath = "S:\Setup Files\CAD\AC3D\Copy Shortcut Support File.bat",
-    [string]$AvRotatePath = "S:\Templates\Civil Templates\CAD Tools\AV Rotate",
-    [string]$CadBackupPath = "C:\CADBackup"
+    [string]$AvRotatePath      = "S:\Templates\Civil Templates\CAD Tools\AV Rotate",
+    [string]$CadBackupPath     = "C:\CADBackup"
 )
+
+# NinjaOne environment variable overrides
+if (-not [string]::IsNullOrWhiteSpace($env:BundleRoot))        { $BundleRoot        = $env:BundleRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:ProfileArgPath))    { $ProfileArgPath    = $env:ProfileArgPath }
+if (-not [string]::IsNullOrWhiteSpace($env:ProfileName))       { $ProfileName       = $env:ProfileName }
+if (-not [string]::IsNullOrWhiteSpace($env:LogRoot))           { $LogRoot           = $env:LogRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:NetworkCacheRoot))  { $NetworkCacheRoot  = $env:NetworkCacheRoot }
+if (-not [string]::IsNullOrWhiteSpace($env:ShortcutBatchPath)) { $ShortcutBatchPath = $env:ShortcutBatchPath }
+if (-not [string]::IsNullOrWhiteSpace($env:AvRotatePath))      { $AvRotatePath      = $env:AvRotatePath }
+if (-not [string]::IsNullOrWhiteSpace($env:CadBackupPath))     { $CadBackupPath     = $env:CadBackupPath }
 
 $ErrorActionPreference = "Stop"
 
 function Write-Info {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Gray
 }
 
 function Write-Warn {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Yellow
 }
 
 function Write-Err {
+    [CmdletBinding()]
     param([string]$Message)
     Write-Host $Message -ForegroundColor Red
 }
 
-function Ensure-Directory {
+function Initialize-Directory {
+    [CmdletBinding()]
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
-        New-Item -Path $Path -ItemType Directory -Force | Out-Null
+        New-Item -Path $Path -ItemType Directory -Force -ErrorAction Stop | Out-Null
     }
 }
 
-function Ensure-RegistryKey {
+function Initialize-RegistryKey {
+    [CmdletBinding()]
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
-        New-Item -Path $Path -Force | Out-Null
+        New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
     }
 }
 
 function Get-C3dProgramDataEnuPath {
+    [CmdletBinding()]
     param([string]$ProgramDataRoot)
 
     if ([string]::IsNullOrWhiteSpace($ProgramDataRoot)) {
@@ -50,9 +106,10 @@ function Get-C3dProgramDataEnuPath {
     }
 
     $autodeskRoot = Join-Path -Path $ProgramDataRoot -ChildPath "Autodesk"
-    $candidates = @()
-    $candidates += (Join-Path -Path $autodeskRoot -ChildPath "C3D 2023\enu")
-    $candidates += (Join-Path -Path $autodeskRoot -ChildPath "C3D 2023\R24.2\enu")
+    $candidates = @(
+        (Join-Path -Path $autodeskRoot -ChildPath "C3D 2023\enu"),
+        (Join-Path -Path $autodeskRoot -ChildPath "C3D 2023\R24.2\enu")
+    )
 
     Write-Info ("ProgramData search root: " + $autodeskRoot)
     Write-Info ("ProgramData candidates: " + ($candidates -join "; "))
@@ -65,9 +122,9 @@ function Get-C3dProgramDataEnuPath {
     }
 
     if (Test-Path -LiteralPath $autodeskRoot) {
-        $c3dRoot = Get-ChildItem -Path $autodeskRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -like "C3D 2023*"
-        } | Select-Object -First 1
+        $c3dRoot = Get-ChildItem -Path $autodeskRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "C3D 2023*" } |
+            Select-Object -First 1
 
         if ($null -ne $c3dRoot) {
             Write-Info ("ProgramData C3D root detected: " + $c3dRoot.FullName)
@@ -101,15 +158,20 @@ function Get-C3dProgramDataEnuPath {
 }
 
 function Test-IsAdmin {
+    [CmdletBinding()]
+    param()
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Test-IsSystem {
+    [CmdletBinding()]
+    param()
     return [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem
 }
 
 function Get-ProfileNameFromArg {
+    [CmdletBinding()]
     param([string]$ArgPath)
     $lines = Get-Content -LiteralPath $ArgPath -ErrorAction Stop
     foreach ($line in $lines) {
@@ -121,6 +183,7 @@ function Get-ProfileNameFromArg {
 }
 
 function Add-SemicolonPath {
+    [CmdletBinding()]
     param(
         [string]$Existing,
         [string]$PathToAdd
@@ -152,20 +215,21 @@ function Add-SemicolonPath {
 }
 
 function Copy-FileIfDifferent {
+    [CmdletBinding()]
     param([string]$Source, [string]$Destination)
 
     if (Test-Path -LiteralPath $Destination) {
         try {
-            $srcHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash
-            $dstHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash
+            $srcHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source -ErrorAction Stop).Hash
+            $dstHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination -ErrorAction Stop).Hash
             if ($srcHash -eq $dstHash) {
                 return "Skipped"
             }
         }
         catch {
             try {
-                $srcInfo = Get-Item -LiteralPath $Source
-                $dstInfo = Get-Item -LiteralPath $Destination
+                $srcInfo = Get-Item -LiteralPath $Source -ErrorAction Stop
+                $dstInfo = Get-Item -LiteralPath $Destination -ErrorAction Stop
                 if ($srcInfo.Length -eq $dstInfo.Length -and $srcInfo.LastWriteTimeUtc -eq $dstInfo.LastWriteTimeUtc) {
                     return "Skipped"
                 }
@@ -176,11 +240,12 @@ function Copy-FileIfDifferent {
         }
     }
 
-    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
     return "Copied"
 }
 
 function Copy-DirectoryContent {
+    [CmdletBinding()]
     param(
         [string]$Source,
         [string]$Destination,
@@ -195,20 +260,22 @@ function Copy-DirectoryContent {
     }
 
     try {
-        Ensure-Directory $Destination
+        Initialize-Directory $Destination
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: destination create failed - $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: destination create failed - $($currentErr.Exception.Message)")
         return
     }
 
     try {
-        $sourceRoot = (Resolve-Path -LiteralPath $Source).Path
+        $sourceRoot = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).Path
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: source resolve failed - $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: source resolve failed - $($currentErr.Exception.Message)")
         return
     }
 
@@ -221,11 +288,11 @@ function Copy-DirectoryContent {
 
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($sourceRoot.Length).TrimStart("\\")
-        $destFile = Join-Path $Destination $relative
-        Ensure-Directory (Split-Path -Path $destFile -Parent)
+        $destFile = Join-Path -Path $Destination -ChildPath $relative
+        Initialize-Directory (Split-Path -Path $destFile -Parent)
         try {
-            $result = Copy-FileIfDifferent -Source $file.FullName -Destination $destFile
-            if ($result -eq "Copied") {
+            $copyResult = Copy-FileIfDifferent -Source $file.FullName -Destination $destFile
+            if ($copyResult -eq "Copied") {
                 $Results.Copied++
             }
             else {
@@ -233,13 +300,15 @@ function Copy-DirectoryContent {
             }
         }
         catch {
+            $currentErr = $_
             $Results.Failed++
-            [void]$Failures.Add("${Label}: $relative - $($_.Exception.Message)")
+            [void]$Failures.Add("${Label}: $relative - $($currentErr.Exception.Message)")
         }
     }
 }
 
 function Copy-FileToCache {
+    [CmdletBinding()]
     param(
         [string]$Source,
         [string]$Destination,
@@ -254,9 +323,9 @@ function Copy-FileToCache {
     }
 
     try {
-        Ensure-Directory (Split-Path -Path $Destination -Parent)
-        $result = Copy-FileIfDifferent -Source $Source -Destination $Destination
-        if ($result -eq "Copied") {
+        Initialize-Directory (Split-Path -Path $Destination -Parent)
+        $copyResult = Copy-FileIfDifferent -Source $Source -Destination $Destination
+        if ($copyResult -eq "Copied") {
             $Results.Copied++
         }
         else {
@@ -264,12 +333,14 @@ function Copy-FileToCache {
         }
     }
     catch {
+        $currentErr = $_
         $Results.Failed++
-        [void]$Failures.Add("${Label}: $($_.Exception.Message)")
+        [void]$Failures.Add("${Label}: $($currentErr.Exception.Message)")
     }
 }
 
 function Invoke-ProcessWithTimeout {
+    [CmdletBinding()]
     param(
         [string]$FilePath,
         [string]$Arguments,
@@ -293,6 +364,7 @@ function Invoke-ProcessWithTimeout {
 }
 
 function Remove-ProfileMru {
+    [CmdletBinding()]
     param([string]$ProfileKeyPath)
     $removed = 0
     $patterns = @(
@@ -306,7 +378,10 @@ function Remove-ProfileMru {
         return 0
     }
 
-    $keys = @($ProfileKeyPath) + @(Get-ChildItem -Path $ProfileKeyPath -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.PsPath })
+    $keys = @($ProfileKeyPath) + @(
+        Get-ChildItem -Path $ProfileKeyPath -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.PsPath }
+    )
     foreach ($key in $keys) {
         $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
         if ($null -eq $props) {
@@ -334,12 +409,12 @@ function Remove-ProfileMru {
 
 $exitCode = 0
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$logDir = Join-Path $LogRoot "2023"
-$logPath = Join-Path $logDir "Import_Civil3D_2023_$timestamp.log"
+$logDir = Join-Path -Path $LogRoot -ChildPath "2023"
+$logPath = Join-Path -Path $logDir -ChildPath "Import_Civil3D_2023_$timestamp.log"
 
 try {
-    Ensure-Directory $logDir
-    Start-Transcript -Path $logPath -Force | Out-Null
+    Initialize-Directory $logDir
+    Start-Transcript -Path $logPath -Force -ErrorAction Stop | Out-Null
 
     if (Test-IsSystem) {
         Write-Err "This script must run as a user, not SYSTEM."
@@ -357,19 +432,18 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($NetworkCacheRoot)) {
-        $NetworkCacheRoot = Join-Path $BundleRoot "NetworkCache"
+        $NetworkCacheRoot = Join-Path -Path $BundleRoot -ChildPath "NetworkCache"
     }
-    Ensure-Directory $NetworkCacheRoot
+    Initialize-Directory $NetworkCacheRoot
 
-    $argCandidates = @()
-    $candidate1 = Join-Path (Join-Path $BundleRoot "Profile") "Civil3D.arg"
-    $candidate2 = Join-Path $BundleRoot "Civil3D.arg"
-    $argCandidates += @($candidate1, $candidate2)
+    $argCandidates = @(
+        (Join-Path -Path (Join-Path -Path $BundleRoot -ChildPath "Profile") -ChildPath "Civil3D.arg"),
+        (Join-Path -Path $BundleRoot -ChildPath "Civil3D.arg")
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
-        $candidate3 = Join-Path $PSScriptRoot "Civil3D.arg"
-        $candidate4 = Join-Path (Join-Path $PSScriptRoot "Profile") "Civil3D.arg"
-        $argCandidates += @($candidate3, $candidate4)
+        $argCandidates += (Join-Path -Path $PSScriptRoot -ChildPath "Civil3D.arg")
+        $argCandidates += (Join-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath "Profile") -ChildPath "Civil3D.arg")
     }
 
     if ([string]::IsNullOrWhiteSpace($ProfileArgPath)) {
@@ -413,9 +487,9 @@ try {
         throw "Civil 3D running"
     }
 
-    $roamRoot = Join-Path $env:APPDATA "Autodesk\C3D 2023\enu"
-    $supportPath = Join-Path $roamRoot "Support"
-    Ensure-Directory $supportPath
+    $roamRoot = Join-Path -Path $env:APPDATA -ChildPath "Autodesk\C3D 2023\enu"
+    $supportPath = Join-Path -Path $roamRoot -ChildPath "Support"
+    Initialize-Directory $supportPath
 
     $enuProgramData = Get-C3dProgramDataEnuPath -ProgramDataRoot $env:ProgramData
     $surveyPath = $null
@@ -438,7 +512,7 @@ try {
         $exitCode = 1
     }
     else {
-        $surveyPath = Join-Path $enuProgramData "Survey"
+        $surveyPath = Join-Path -Path $enuProgramData -ChildPath "Survey"
 
         $pipeCatalogCandidates = @(Get-ChildItem -Path $enuProgramData -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*Pipe*Catalog*" })
         if ($pipeCatalogCandidates.Count -gt 0) {
@@ -452,13 +526,13 @@ try {
         }
     }
 
-    $backupRoot = Join-Path $logDir "Backup_$timestamp"
-    Ensure-Directory $backupRoot
+    $backupRoot = Join-Path -Path $logDir -ChildPath "Backup_$timestamp"
+    Initialize-Directory $backupRoot
 
-    $profileRegKey = "HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\Profiles\$ProfileName"
+    $profileRegKey   = "HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\Profiles\$ProfileName"
     $profileRegKeyPs = "Registry::" + $profileRegKey
     if (Test-Path -LiteralPath $profileRegKeyPs) {
-        $backupFile = Join-Path $backupRoot "ProfileBackup.reg"
+        $backupFile = Join-Path -Path $backupRoot -ChildPath "ProfileBackup.reg"
         & reg.exe export "$profileRegKey" "$backupFile" /y | Out-Null
         Remove-Item -LiteralPath $profileRegKeyPs -Recurse -Force -ErrorAction SilentlyContinue
         Write-Info "Backed up and cleared profile: $ProfileName"
@@ -476,39 +550,41 @@ try {
 
     $profilesRoot = "Registry::HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\Profiles"
     if (-not (Test-Path -LiteralPath $profilesRoot)) {
-        New-Item -Path $profilesRoot -Force | Out-Null
+        New-Item -Path $profilesRoot -Force -ErrorAction Stop | Out-Null
     }
-    New-ItemProperty -Path $profilesRoot -Name "CurrentProfile" -Value $ProfileName -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $profilesRoot -Name "DefaultProfile" -Value $ProfileName -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $profilesRoot -Name "CurrentProfile" -Value $ProfileName -PropertyType String -Force -ErrorAction Stop | Out-Null
+    New-ItemProperty -Path $profilesRoot -Name "DefaultProfile" -Value $ProfileName -PropertyType String -Force -ErrorAction Stop | Out-Null
 
     $fixedGeneralKey = "Registry::HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\FixedProfile\General"
-    Ensure-RegistryKey $fixedGeneralKey
+    Initialize-RegistryKey $fixedGeneralKey
     try {
-        Ensure-Directory $CadBackupPath
-        New-ItemProperty -Path $fixedGeneralKey -Name "AcetMoveBak" -Value $CadBackupPath -PropertyType String -Force | Out-Null
+        Initialize-Directory $CadBackupPath
+        New-ItemProperty -Path $fixedGeneralKey -Name "AcetMoveBak" -Value $CadBackupPath -PropertyType String -Force -ErrorAction Stop | Out-Null
         Write-Info "Backup folder set: $CadBackupPath"
     }
     catch {
-        Write-Warn "Failed to set backup folder: $($_.Exception.Message)"
+        $currentErr = $_
+        Write-Warn "Failed to set backup folder: $($currentErr.Exception.Message)"
         $exitCode = 1
     }
 
     $variablesKey = "Registry::HKCU\Software\Autodesk\AutoCAD\R24.2\ACAD-6100:409\Profiles\$ProfileName\Variables"
-    Ensure-RegistryKey $variablesKey
+    Initialize-RegistryKey $variablesKey
     try {
-        New-ItemProperty -Path $variablesKey -Name "ISAVEBAK" -Value "1" -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $variablesKey -Name "ISAVEBAK" -Value "1" -PropertyType String -Force -ErrorAction Stop | Out-Null
         Write-Info "ISAVEBAK set to 1"
     }
     catch {
-        Write-Warn "Failed to set ISAVEBAK: $($_.Exception.Message)"
+        $currentErr = $_
+        Write-Warn "Failed to set ISAVEBAK: $($currentErr.Exception.Message)"
         $exitCode = 1
     }
 
     try {
-        $currentTrusted = (Get-ItemProperty -Path $variablesKey -ErrorAction SilentlyContinue).TRUSTEDPATHS
+        $currentTrusted = (Get-ItemProperty -Path $variablesKey -ErrorAction Stop).TRUSTEDPATHS
         $updatedTrusted = Add-SemicolonPath -Existing $currentTrusted -PathToAdd $AvRotatePath
         if ($updatedTrusted -ne $currentTrusted) {
-            New-ItemProperty -Path $variablesKey -Name "TRUSTEDPATHS" -Value $updatedTrusted -PropertyType String -Force | Out-Null
+            New-ItemProperty -Path $variablesKey -Name "TRUSTEDPATHS" -Value $updatedTrusted -PropertyType String -Force -ErrorAction Stop | Out-Null
             Write-Info "Trusted path added: $AvRotatePath"
         }
         else {
@@ -516,7 +592,8 @@ try {
         }
     }
     catch {
-        Write-Warn "Failed to update trusted paths: $($_.Exception.Message)"
+        $currentErr = $_
+        Write-Warn "Failed to update trusted paths: $($currentErr.Exception.Message)"
         $exitCode = 1
     }
 
@@ -526,28 +603,28 @@ try {
         Write-Info "Removed $mruRemoved MRU entries"
     }
 
-    $results = @{
-        Copied = 0
+    $copyResults = @{
+        Copied  = 0
         Skipped = 0
-        Failed = 0
+        Failed  = 0
     }
     $failedItems = New-Object System.Collections.ArrayList
 
-    $bundleSupport = Join-Path $BundleRoot "Support"
-    $bundleSurvey = Join-Path $BundleRoot "Survey"
-    $bundlePipe = Join-Path $BundleRoot "PipeCatalog"
-    $bundleLisp = Join-Path $BundleRoot "Lisp"
+    $bundleSupport = Join-Path -Path $BundleRoot -ChildPath "Support"
+    $bundleSurvey  = Join-Path -Path $BundleRoot -ChildPath "Survey"
+    $bundlePipe    = Join-Path -Path $BundleRoot -ChildPath "PipeCatalog"
+    $bundleLisp    = Join-Path -Path $BundleRoot -ChildPath "Lisp"
 
-    Copy-DirectoryContent -Source $bundleSupport -Destination $supportPath -Label "Support" -Results $results -Failures $failedItems
+    Copy-DirectoryContent -Source $bundleSupport -Destination $supportPath -Label "Support" -Results $copyResults -Failures $failedItems
     if ($null -ne $surveyPath) {
-        Copy-DirectoryContent -Source $bundleSurvey -Destination $surveyPath -Label "Survey" -Results $results -Failures $failedItems
+        Copy-DirectoryContent -Source $bundleSurvey -Destination $surveyPath -Label "Survey" -Results $copyResults -Failures $failedItems
     }
     else {
         Write-Info "Skip Survey: ProgramData path unavailable"
     }
 
     if ($null -ne $pipeCatalogPath) {
-        Copy-DirectoryContent -Source $bundlePipe -Destination $pipeCatalogPath -Label "PipeCatalog" -Results $results -Failures $failedItems
+        Copy-DirectoryContent -Source $bundlePipe -Destination $pipeCatalogPath -Label "PipeCatalog" -Results $copyResults -Failures $failedItems
     }
     elseif ($null -ne $enuProgramData) {
         Write-Warn "Pipe catalog path not found under $enuProgramData"
@@ -557,13 +634,13 @@ try {
         Write-Info "Skip PipeCatalog: ProgramData path unavailable"
     }
 
-    Copy-DirectoryContent -Source $bundleLisp -Destination (Join-Path $supportPath "Lisp") -Label "Lisp" -Results $results -Failures $failedItems
+    Copy-DirectoryContent -Source $bundleLisp -Destination (Join-Path -Path $supportPath -ChildPath "Lisp") -Label "Lisp" -Results $copyResults -Failures $failedItems
 
-    $avRotateCache = Join-Path $NetworkCacheRoot "AV Rotate"
-    Copy-DirectoryContent -Source $AvRotatePath -Destination $avRotateCache -Label "NetworkCache-AVRotate" -Results $results -Failures $failedItems
+    $avRotateCache = Join-Path -Path $NetworkCacheRoot -ChildPath "AV Rotate"
+    Copy-DirectoryContent -Source $AvRotatePath -Destination $avRotateCache -Label "NetworkCache-AVRotate" -Results $copyResults -Failures $failedItems
 
-    $shortcutCache = Join-Path $NetworkCacheRoot "Copy Shortcut Support File.bat"
-    Copy-FileToCache -Source $ShortcutBatchPath -Destination $shortcutCache -Label "NetworkCache-ShortcutBatch" -Results $results -Failures $failedItems
+    $shortcutCache = Join-Path -Path $NetworkCacheRoot -ChildPath "Copy Shortcut Support File.bat"
+    Copy-FileToCache -Source $ShortcutBatchPath -Destination $shortcutCache -Label "NetworkCache-ShortcutBatch" -Results $copyResults -Failures $failedItems
 
     if (Test-Path -LiteralPath $ShortcutBatchPath) {
         Write-Info "Running shortcut support batch: $ShortcutBatchPath"
@@ -591,9 +668,9 @@ try {
 
     Write-Host ""
     Write-Host "Results:" -ForegroundColor Cyan
-    Write-Host "  Copied : $($results.Copied)" -ForegroundColor Green
-    Write-Host "  Skipped: $($results.Skipped)" -ForegroundColor Gray
-    Write-Host "  Failed : $($results.Failed)" -ForegroundColor Red
+    Write-Host "  Copied : $($copyResults.Copied)"  -ForegroundColor Green
+    Write-Host "  Skipped: $($copyResults.Skipped)" -ForegroundColor Gray
+    Write-Host "  Failed : $($copyResults.Failed)"  -ForegroundColor Red
 
     if ($failedItems.Count -gt 0) {
         Write-Warn "Some items failed to copy. Review the log for details."
@@ -601,11 +678,12 @@ try {
     }
 }
 catch {
+    $currentErr = $_
     if ($exitCode -eq 0) {
         $exitCode = 2
     }
-    Write-Err "FATAL: $($_.Exception.Message)"
-    Write-Err "Stack trace: $($_.ScriptStackTrace)"
+    Write-Err "FATAL: $($currentErr.Exception.Message)"
+    Write-Err "Stack trace: $($currentErr.ScriptStackTrace)"
 }
 finally {
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
