@@ -407,6 +407,96 @@ function Remove-ProfileMru {
     return $removed
 }
 
+function Resolve-AcadExePath {
+    [CmdletBinding()]
+    param()
+
+    $programFiles = $env:ProgramFiles
+    if ([string]::IsNullOrWhiteSpace($programFiles)) {
+        $programFiles = "C:\Program Files"
+    }
+    $autodeskRoot = Join-Path -Path $programFiles -ChildPath "Autodesk"
+
+    if (-not (Test-Path -LiteralPath $autodeskRoot)) {
+        Write-Info "Autodesk install root not found: $autodeskRoot"
+        return $null
+    }
+
+    $bestYear = 0
+    $bestPath = $null
+
+    $dirs = @(Get-ChildItem -Path $autodeskRoot -Directory -ErrorAction SilentlyContinue)
+    foreach ($dir in $dirs) {
+        if ($dir.Name -match '(\d{4})') {
+            $year = [int]$Matches[1]
+            $acadExe = Join-Path -Path $dir.FullName -ChildPath "acad.exe"
+            if ((Test-Path -LiteralPath $acadExe) -and ($year -gt $bestYear)) {
+                $bestYear = $year
+                $bestPath = $acadExe
+            }
+        }
+    }
+
+    if ($null -ne $bestPath) {
+        Write-Info "Detected acad.exe (year $bestYear): $bestPath"
+    }
+    else {
+        Write-Info "acad.exe not found under $autodeskRoot"
+    }
+
+    return $bestPath
+}
+
+function Set-DwgFileAssociation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AcadExePath
+    )
+
+    $dwgKeyPath = "Registry::HKEY_CLASSES_ROOT\.dwg"
+    if (-not (Test-Path -LiteralPath $dwgKeyPath)) {
+        Write-Warn "HKCR\.dwg not found - .dwg association does not exist"
+        return $false
+    }
+
+    $dwgProps = Get-ItemProperty -Path $dwgKeyPath -ErrorAction Stop
+    $progId   = $dwgProps.'(default)'
+    if ([string]::IsNullOrWhiteSpace($progId)) {
+        Write-Warn "HKCR\.dwg default value is empty - cannot determine ProgID"
+        return $false
+    }
+
+    Write-Info "DWG ProgID: $progId"
+
+    $openCmdPath = "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command"
+    if (-not (Test-Path -LiteralPath $openCmdPath)) {
+        Write-Warn "Shell open command key not found: $openCmdPath"
+        return $false
+    }
+
+    $currentCmd = (Get-ItemProperty -Path $openCmdPath -ErrorAction Stop).'(default)'
+    Write-Info "Current DWG open command: $currentCmd"
+
+    $newCmd = "`"$AcadExePath`" `"%1`""
+
+    if ($currentCmd -eq $newCmd) {
+        Write-Info "DWG file association already correct - no change needed"
+        return $true
+    }
+
+    Set-Item -Path $openCmdPath -Value $newCmd -ErrorAction Stop
+
+    $verifiedCmd = (Get-ItemProperty -Path $openCmdPath -ErrorAction Stop).'(default)'
+    if ($verifiedCmd -eq $newCmd) {
+        Write-Info "DWG file association set: $newCmd"
+        return $true
+    }
+
+    Write-Warn "DWG association verification failed. Observed: $verifiedCmd"
+    return $false
+}
+
 $exitCode = 0
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logDir = Join-Path -Path $LogRoot -ChildPath "2023"
@@ -663,6 +753,35 @@ try {
         }
         else {
             Write-Info "Shortcut support batch not found on S:. Skipping"
+        }
+    }
+
+    # --- DWG file association fix ---
+    Write-Host ""
+    Write-Host "DWG File Association:" -ForegroundColor Cyan
+    if (-not $isAdmin) {
+        Write-Warn "Not running as Administrator - skipping DWG file association fix (requires elevation)"
+        $exitCode = 1
+    }
+    else {
+        $acadExePath = Resolve-AcadExePath
+        if ($null -eq $acadExePath) {
+            Write-Warn "acad.exe not found - skipping DWG file association fix"
+            $exitCode = 1
+        }
+        else {
+            try {
+                $dwgResult = Set-DwgFileAssociation -AcadExePath $acadExePath
+                if (-not $dwgResult) {
+                    Write-Warn "DWG file association fix did not complete successfully"
+                    $exitCode = 1
+                }
+            }
+            catch {
+                $currentErr = $_
+                Write-Warn "DWG file association fix failed: $($currentErr.Exception.Message)"
+                $exitCode = 1
+            }
         }
     }
 
